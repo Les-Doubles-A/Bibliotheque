@@ -1,0 +1,5 @@
+/target/
+*.exe.old
+*.exe.new
+__pycache__/
+build/
