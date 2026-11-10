@@ -1,5 +1,7 @@
 # Bibliotheque (Rust Edition)
 
+Dépôt GitHub : **https://github.com/Les-Doubles-A/Bibliotheque**
+
 Application Windows native ultra-rapide ecrite en **Rust** (`egui`/`eframe` + Win32 + `winsqlite3` + `winhttp`) qui repertorie les executables (`.exe`) et raccourcis d'applications (`.lnk`) du PC.
 
 ## Fonctionnalites & Optimisations
@@ -21,3 +23,16 @@ ou directement via Cargo :
 ```bat
 cargo build --release
 ```
+
+<!-- installeur-release -->
+## Installation
+
+Téléchargez **`Bibliotheque-Setup-2.0.0.exe`** depuis la [dernière release](https://github.com/Les-Doubles-A/Bibliotheque/releases/latest), puis lancez-le.
+
+L'installation se fait pour l'utilisateur courant, sans droits administrateur (par défaut dans `%LOCALAPPDATA%\Programs\Bibliotheque`), avec un raccourci dans le menu Démarrer et une désinstallation depuis les Paramètres Windows.
+
+L'installeur n'est pas signé : si Windows SmartScreen l'affiche, cliquez sur « Informations complémentaires » puis « Exécuter quand même ».
+
+### Recréer l'installeur
+
+Compiler l'application (`cargo build --release`), puis lancer [Inno Setup 6](https://jrsoftware.org/isinfo.php) : `iscc installer\Bibliotheque.iss`. Le setup est créé dans `installer\Output\`.

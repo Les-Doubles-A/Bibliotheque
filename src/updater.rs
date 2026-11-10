@@ -377,7 +377,8 @@ pub fn parse_github_release_json(json: &str) -> Option<UpdateInfo> {
     let mut download_url = None;
     let mut search_slice = json;
     while let Some(url) = extract_json_string_field(search_slice, "browser_download_url") {
-        if url.to_ascii_lowercase().ends_with(".exe") {
+        let lower = url.to_ascii_lowercase();
+        if lower.ends_with(".exe") && !lower.contains("setup") {
             download_url = Some(url);
             break;
         }
