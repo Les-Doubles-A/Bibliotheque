@@ -1,6 +1,6 @@
 [package]
 name = "bibliotheque"
-version = "2.2.0"
+version = "2.3.0"
 edition = "2024"
 description = "Application Windows locale ultra-rapide qui répertorie les applications graphiques (.exe) du PC"
 build = "build.rs"

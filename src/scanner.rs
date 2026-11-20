@@ -32,28 +32,21 @@ fn is_hidden_or_system(meta: &fs::Metadata) -> bool {
     (meta.file_attributes() & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) != 0
 }
 
-/// Vérifie sans allocation si le nom de dossier doit être ignoré (système, caches, dev, redist).
+/// Vérifie sans allocation si le nom de dossier doit être ignoré (système, caches, dev, redist, paquets).
 #[inline]
 pub fn should_skip_dir(name: &OsStr) -> bool {
     let bytes = name.as_encoded_bytes();
+    if bytes.starts_with(b".") {
+        return true;
+    }
     match bytes.len() {
-        3 => {
-            bytes.eq_ignore_ascii_case(b"tmp")
-                || bytes.eq_ignore_ascii_case(b"obj")
-                || bytes.eq_ignore_ascii_case(b".m2")
-        }
+        3 => bytes.eq_ignore_ascii_case(b"tmp") || bytes.eq_ignore_ascii_case(b"obj"),
         4 => {
-            bytes.eq_ignore_ascii_case(b".git")
-                || bytes.eq_ignore_ascii_case(b"temp")
+            bytes.eq_ignore_ascii_case(b"temp")
                 || bytes.eq_ignore_ascii_case(b"logs")
                 || bytes.eq_ignore_ascii_case(b"venv")
-                || bytes.eq_ignore_ascii_case(b".npm")
         }
-        5 => {
-            bytes.eq_ignore_ascii_case(b"cache")
-                || bytes.eq_ignore_ascii_case(b".venv")
-                || bytes.eq_ignore_ascii_case(b".yarn")
-        }
+        5 => bytes.eq_ignore_ascii_case(b"cache"),
         6 => {
             bytes.eq_ignore_ascii_case(b"winsxs")
                 || bytes.eq_ignore_ascii_case(b"caches")
@@ -61,16 +54,14 @@ pub fn should_skip_dir(name: &OsStr) -> bool {
                 || bytes.eq_ignore_ascii_case(b"vendor")
                 || bytes.eq_ignore_ascii_case(b"redist")
                 || bytes.eq_ignore_ascii_case(b"dotnet")
-                || bytes.eq_ignore_ascii_case(b".cargo")
-                || bytes.eq_ignore_ascii_case(b".nuget")
+                || bytes.eq_ignore_ascii_case(b"winget")
         }
         7 => {
             bytes.eq_ignore_ascii_case(b"windows")
                 || bytes.eq_ignore_ascii_case(b"updates")
                 || bytes.eq_ignore_ascii_case(b"directx")
                 || bytes.eq_ignore_ascii_case(b"drivers")
-                || bytes.eq_ignore_ascii_case(b".gradle")
-                || bytes.eq_ignore_ascii_case(b".rustup")
+                || bytes.eq_ignore_ascii_case(b"staging")
         }
         8 => {
             bytes.eq_ignore_ascii_case(b"recovery")
@@ -79,6 +70,7 @@ pub fn should_skip_dir(name: &OsStr) -> bool {
                 || bytes.eq_ignore_ascii_case(b"gpucache")
                 || bytes.eq_ignore_ascii_case(b"locallow")
                 || bytes.eq_ignore_ascii_case(b"vcredist")
+                || bytes.eq_ignore_ascii_case(b"unigetui")
         }
         9 => bytes.eq_ignore_ascii_case(b"installer"),
         10 => {
@@ -86,13 +78,13 @@ pub fn should_skip_dir(name: &OsStr) -> bool {
                 || bytes.eq_ignore_ascii_case(b"code cache")
                 || bytes.eq_ignore_ascii_case(b"crashdumps")
                 || bytes.eq_ignore_ascii_case(b"installer2")
+                || bytes.eq_ignore_ascii_case(b"chocolatey")
         }
         11 => {
             bytes.eq_ignore_ascii_case(b"$winreagent")
                 || bytes.eq_ignore_ascii_case(b"windowsapps")
                 || bytes.eq_ignore_ascii_case(b"programdata")
                 || bytes.eq_ignore_ascii_case(b"__pycache__")
-                || bytes.eq_ignore_ascii_case(b".pnpm-store")
         }
         12 => {
             bytes.eq_ignore_ascii_case(b"$recycle.bin")
@@ -149,8 +141,12 @@ pub fn should_skip_exe_stem(stem: &str) -> bool {
         return true;
     }
 
-    // Suffixes exclus
-    if lower.ends_with("setup") {
+    // Suffixes exclus (installeurs, variantes UIA / 32-bit ANSI-Unicode)
+    if lower.ends_with("setup")
+        || lower.ends_with("_uia")
+        || lower.ends_with("a32")
+        || lower.ends_with("u32")
+    {
         return true;
     }
 
@@ -276,6 +272,107 @@ fn extract_exe_stem_len(name: &OsStr) -> Option<usize> {
     }
 }
 
+/// Détecte si un exécutable est une variante d'architecture redondante (`*32.exe`, `*64.exe`, `*x86.exe`)
+/// alors que l'exécutable principal (ou sa version 64-bit) existe déjà dans le même dossier.
+fn is_redundant_arch_variant(path: &Path, stem: &str) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let lower = stem.to_ascii_lowercase();
+    if lower.len() > 2 && lower.ends_with("32") {
+        let base = &stem[..stem.len() - 2];
+        let trimmed = base.trim_end_matches(['_', '-']);
+        if (!trimmed.is_empty() && parent.join(format!("{trimmed}.exe")).is_file())
+            || parent.join(format!("{base}64.exe")).is_file()
+        {
+            return true;
+        }
+    } else if lower.len() > 3 && lower.ends_with("x86") {
+        let base = &stem[..stem.len() - 3];
+        let trimmed = base.trim_end_matches(['_', '-']);
+        if (!trimmed.is_empty() && parent.join(format!("{trimmed}.exe")).is_file())
+            || parent.join(format!("{base}x64.exe")).is_file()
+            || parent.join(format!("{base}64.exe")).is_file()
+        {
+            return true;
+        }
+    } else if lower.len() > 2 && lower.ends_with("64") {
+        let base = &stem[..stem.len() - 2];
+        let trimmed = base.trim_end_matches(['_', '-']);
+        if !trimmed.is_empty() && parent.join(format!("{trimmed}.exe")).is_file() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Analyse un nom de dossier versionné (`v2.0.30`, `app-1.0.9161`, `130.0.6723.92`).
+/// Retourne `(prefixe_normalise, composantes_numeriques)` s'il y a au moins 2 segments numériques.
+pub fn parse_version_dir_name(name: &str) -> Option<(&'static str, Vec<u32>)> {
+    let lower = name.to_ascii_lowercase();
+    let (prefix, rest) = if let Some(r) = lower.strip_prefix("app-") {
+        ("app-", r)
+    } else if let Some(r) = lower.strip_prefix("version-") {
+        ("version-", r)
+    } else if let Some(r) = lower.strip_prefix("ver-") {
+        ("ver-", r)
+    } else if let Some(r) = lower.strip_prefix("rel-") {
+        ("rel-", r)
+    } else if let Some(r) = lower.strip_prefix('v') {
+        ("v", r)
+    } else {
+        ("", lower.as_str())
+    };
+
+    if rest.is_empty() || !rest.as_bytes()[0].is_ascii_digit() {
+        return None;
+    }
+
+    let mut parts = Vec::with_capacity(4);
+    for seg in rest.split('.') {
+        if seg.is_empty() || !seg.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        parts.push(seg.parse::<u32>().ok()?);
+    }
+
+    if parts.len() >= 2 {
+        Some((prefix, parts))
+    } else {
+        None
+    }
+}
+
+/// Indique si `dir` est un dossier versionné obsolète car son parent contient une version plus récente.
+fn is_obsolete_version_dir(dir: &Path) -> bool {
+    let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let Some((prefix, ver)) = parse_version_dir_name(name) else {
+        return false;
+    };
+    let Some(parent) = dir.parent() else {
+        return false;
+    };
+    let Ok(entries) = fs::read_dir(parent) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+            continue;
+        }
+        let sib_name = entry.file_name();
+        if let Some(sib_str) = sib_name.to_str()
+            && let Some((sib_prefix, sib_ver)) = parse_version_dir_name(sib_str)
+            && sib_prefix == prefix
+            && sib_ver > ver
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Vérifie si un chemin déjà enregistré en base reste valide selon les règles de filtrage actuelles.
 pub fn is_valid_library_path(path: &Path) -> bool {
     let Ok(meta) = fs::metadata(path) else {
@@ -293,7 +390,7 @@ pub fn is_valid_library_path(path: &Path) -> bool {
     };
     let name_full = file_name.to_string_lossy();
     let stem = name_full.get(..stem_len).unwrap_or(&name_full);
-    if should_skip_exe_stem(stem) {
+    if should_skip_exe_stem(stem) || is_redundant_arch_variant(path, stem) {
         return false;
     }
 
@@ -304,6 +401,13 @@ pub fn is_valid_library_path(path: &Path) -> bool {
             {
                 return false;
             }
+        }
+        let mut cur = Some(parent);
+        while let Some(dir) = cur {
+            if is_obsolete_version_dir(dir) {
+                return false;
+            }
+            cur = dir.parent();
         }
     }
 
@@ -381,6 +485,9 @@ fn run_parallel_scan(
 
                         if let Some(dir) = maybe_dir {
                             if let Ok(entries) = fs::read_dir(&dir) {
+                                let mut versioned_dirs: Vec<(&'static str, Vec<u32>, PathBuf)> =
+                                    Vec::new();
+
                                 for entry_res in entries {
                                     let Ok(entry) = entry_res else { continue };
                                     let Ok(ft) = entry.file_type() else { continue };
@@ -395,8 +502,15 @@ fn run_parallel_scan(
                                         if entry.metadata().is_ok_and(|m| is_hidden_or_system(&m)) {
                                             continue;
                                         }
-                                        active_tasks.fetch_add(1, Ordering::Relaxed);
-                                        worker.push(entry.path());
+                                        if let Some(name_str) = file_name.to_str()
+                                            && let Some((prefix, ver)) =
+                                                parse_version_dir_name(name_str)
+                                        {
+                                            versioned_dirs.push((prefix, ver, entry.path()));
+                                        } else {
+                                            active_tasks.fetch_add(1, Ordering::Relaxed);
+                                            worker.push(entry.path());
+                                        }
                                     } else if ft.is_file()
                                         && let Some(stem_len) = extract_exe_stem_len(&file_name)
                                     {
@@ -413,6 +527,9 @@ fn run_parallel_scan(
                                         }
 
                                         let full_path = entry.path();
+                                        if is_redundant_arch_variant(&full_path, stem) {
+                                            continue;
+                                        }
                                         let path_str = full_path.to_string_lossy().into_owned();
                                         if excluded.contains(&path_str) {
                                             continue;
@@ -436,6 +553,29 @@ fn run_parallel_scan(
                                             );
                                             let _ = batch_tx.send(batch);
                                         }
+                                    }
+                                }
+
+                                // Pour les sous-dossiers versionnés (v2.0.26, v2.0.30, app-1.0.x...),
+                                // ne parcourir que la version la plus récente par préfixe.
+                                if !versioned_dirs.is_empty() {
+                                    let mut best_by_prefix: Vec<(&'static str, Vec<u32>, PathBuf)> =
+                                        Vec::new();
+                                    for (prefix, ver, path) in versioned_dirs {
+                                        if let Some(slot) =
+                                            best_by_prefix.iter_mut().find(|(p, _, _)| *p == prefix)
+                                        {
+                                            if ver > slot.1 {
+                                                slot.1 = ver;
+                                                slot.2 = path;
+                                            }
+                                        } else {
+                                            best_by_prefix.push((prefix, ver, path));
+                                        }
+                                    }
+                                    for (_, _, path) in best_by_prefix {
+                                        active_tasks.fetch_add(1, Ordering::Relaxed);
+                                        worker.push(path);
                                     }
                                 }
                             }
@@ -484,10 +624,25 @@ mod tests {
         assert!(should_skip_dir(OsStr::new("_CommonRedist")));
         assert!(should_skip_dir(OsStr::new("GPUCache")));
         assert!(should_skip_dir(OsStr::new(".m2")));
+        assert!(should_skip_dir(OsStr::new(".staging")));
+        assert!(should_skip_dir(OsStr::new("Chocolatey")));
+        assert!(should_skip_dir(OsStr::new("UniGetUI")));
         assert!(should_skip_dir(OsStr::new("Reference Assemblies")));
         assert!(!should_skip_dir(OsStr::new("Program Files")));
         assert!(!should_skip_dir(OsStr::new("Programs")));
         assert!(!should_skip_dir(OsStr::new("Steam")));
+    }
+
+    #[test]
+    fn test_version_dir_parsing() {
+        let (p1, v1) = parse_version_dir_name("v2.0.26").unwrap();
+        let (p2, v2) = parse_version_dir_name("v2.0.30").unwrap();
+        assert_eq!(p1, p2);
+        assert!(v2 > v1);
+        assert_eq!(parse_version_dir_name("app-1.0.9161"), Some(("app-", vec![1, 0, 9161])));
+        assert_eq!(parse_version_dir_name("130.0.6723.92"), Some(("", vec![130, 0, 6723, 92])));
+        assert_eq!(parse_version_dir_name("v2"), None);
+        assert_eq!(parse_version_dir_name("AutoHotkey"), None);
     }
 
     #[test]
@@ -504,6 +659,9 @@ mod tests {
         assert!(should_skip_exe_stem("Squirrel"));
         assert!(should_skip_exe_stem("Aac3572DramHal_x64"));
         assert!(should_skip_exe_stem("AacAmbientLighting"));
+        assert!(should_skip_exe_stem("AutoHotkey64_UIA"));
+        assert!(should_skip_exe_stem("AutoHotkeyA32"));
+        assert!(should_skip_exe_stem("AutoHotkeyU32"));
 
         assert!(!should_skip_exe_stem("Bibliotheque"));
         assert!(!should_skip_exe_stem("Discord"));

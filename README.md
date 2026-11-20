@@ -28,7 +28,7 @@ cargo build --release
 <!-- installeur-release -->
 ## Installation
 
-Téléchargez **`Bibliotheque-Setup-2.2.0.exe`** depuis la [dernière release](https://github.com/Les-Doubles-A/Bibliotheque/releases/latest), puis lancez-le.
+Téléchargez **`Bibliotheque-Setup-2.3.0.exe`** depuis la [dernière release](https://github.com/Les-Doubles-A/Bibliotheque/releases/latest), puis lancez-le.
 
 L'installation se fait pour l'utilisateur courant, sans droits administrateur (par défaut dans `%LOCALAPPDATA%\Programs\Bibliotheque`), avec un raccourci dans le menu Démarrer et une désinstallation depuis les Paramètres Windows.
 

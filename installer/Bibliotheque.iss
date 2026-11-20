@@ -1,8 +1,8 @@
 ﻿; Installeur Inno Setup de Bibliotheque. Compilation : iscc installer\Bibliotheque.iss
-; Le setup est cree dans installer\Output\Bibliotheque-Setup-2.2.0.exe
+; Le setup est cree dans installer\Output\Bibliotheque-Setup-2.3.0.exe
 #define MyAppExe "Bibliotheque.exe"
 #define MyAppName "Bibliotheque"
-#define MyAppVersion "2.2.0"
+#define MyAppVersion "2.3.0"
 #define MyAppURL "https://github.com/Les-Doubles-A/Bibliotheque"
 
 [Setup]
