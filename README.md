@@ -2,12 +2,13 @@
 
 Dépôt GitHub : **https://github.com/Les-Doubles-A/Bibliotheque**
 
-Application Windows native ultra-rapide ecrite en **Rust** (`egui`/`eframe` + Win32 + `winsqlite3` + `winhttp`) qui repertorie les executables (`.exe`) et raccourcis d'applications (`.lnk`) du PC.
+Application Windows native ultra-rapide ecrite en **Rust** (`egui`/`eframe` + Win32 + `winsqlite3` + `winhttp`) qui repertorie uniquement les vraies applications graphiques (`.exe`) du PC.
 
 ## Fonctionnalites & Optimisations
 
 - **100 % Rust natif** : binaire autonome leger (`dist\Bibliotheque.exe`) avec demarrage instantane, sans dependance Python.
-- **Scanner multi-thread work-stealing (`crossbeam-deque`)** : parcours parallele sur tous les coeurs CPU avec filtrage sans allocation des dossiers systeme (`winsxs`, `installer`, `$recycle.bin`, `node_modules`, `.git`, etc.) et des extensions.
+- **Scanner multi-thread work-stealing (`crossbeam-deque`) avec filtrage intelligent** : parcours parallele sur tous les coeurs CPU ; ignore automatiquement les raccourcis (`.lnk`), les outils console (verification de l'en-tete PE `GUI`), les fichiers/dossiers caches ou systeme, les dossiers techniques (`Windows`, `node_modules`, caches, redistribuables, etc.) et les executables indesirables (desinstalleurs, installeurs, updaters, crash reporters, helpers, services).
+- **Nettoyage automatique de la base** : purge au demarrage les entrees obsoletes, raccourcis ou fichiers indesirables tout en preservant les categories existantes.
 - **Base SQLite native (`winsqlite3.dll`) en mode WAL** : transactions atomiques preparees ultra-rapides et compatibilite totale avec `%LOCALAPPDATA%\Bibliotheque\library.db`.
 - **Index en memoire avec recherche SIMD (`memchr::memmem`)** : filtrage instantane (`< 0.1 ms`) par nom, chemin ou categorie a chaque frappe.
 - **Table virtualisee & icones Shell asynchrones (pile LIFO)** : seules les lignes visibles a l'ecran sont rendues ; les vraies icones Windows (`IShellItemImageFactory`, `IShellLinkW`, `SHGetFileInfoW`) sont extraites sur un pool de 4 threads COM sans jamais bloquer l'interface.
@@ -27,7 +28,7 @@ cargo build --release
 <!-- installeur-release -->
 ## Installation
 
-Téléchargez **`Bibliotheque-Setup-2.0.0.exe`** depuis la [dernière release](https://github.com/Les-Doubles-A/Bibliotheque/releases/latest), puis lancez-le.
+Téléchargez **`Bibliotheque-Setup-2.1.0.exe`** depuis la [dernière release](https://github.com/Les-Doubles-A/Bibliotheque/releases/latest), puis lancez-le.
 
 L'installation se fait pour l'utilisateur courant, sans droits administrateur (par défaut dans `%LOCALAPPDATA%\Programs\Bibliotheque`), avec un raccourci dans le menu Démarrer et une désinstallation depuis les Paramètres Windows.
 

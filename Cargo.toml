@@ -1,8 +1,8 @@
 [package]
 name = "bibliotheque"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2024"
-description = "Application Windows locale ultra-rapide qui répertorie les exécutables et raccourcis d'applications du PC"
+description = "Application Windows locale ultra-rapide qui répertorie les applications graphiques (.exe) du PC"
 build = "build.rs"
 
 [[bin]]

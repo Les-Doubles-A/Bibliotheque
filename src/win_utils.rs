@@ -63,10 +63,12 @@ pub fn os_prefers_dark_mode() -> bool {
 }
 
 pub fn standard_locations() -> Vec<PathBuf> {
-    let mut locations = Vec::with_capacity(6);
+    let mut locations = Vec::with_capacity(4);
     if let Some(home) = env::var_os("USERPROFILE").map(PathBuf::from) {
         locations.push(home.join("Desktop"));
-        locations.push(home.join("Downloads"));
+    }
+    if let Some(local_appdata) = env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        locations.push(local_appdata.join("Programs"));
     }
     let pf = env::var_os("ProgramFiles")
         .map(PathBuf::from)
@@ -77,14 +79,6 @@ pub fn standard_locations() -> Vec<PathBuf> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\Program Files (x86)"));
     locations.push(pf86);
-
-    if let Some(appdata) = env::var_os("APPDATA").map(PathBuf::from) {
-        locations.push(appdata.join(r"Microsoft\Windows\Start Menu\Programs"));
-    }
-    let progdata = env::var_os("ProgramData")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
-    locations.push(progdata.join(r"Microsoft\Windows\Start Menu\Programs"));
 
     locations.into_iter().filter(|p| p.exists()).collect()
 }

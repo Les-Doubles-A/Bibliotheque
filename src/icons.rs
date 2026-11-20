@@ -31,7 +31,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 use windows_sys::core::GUID;
 
-use crate::db::ItemKind;
 use crate::win_utils::to_wide_null;
 
 #[repr(C)]
@@ -94,7 +93,6 @@ pub struct IconManager {
     queue: Arc<(Mutex<ViewportQueue>, Condvar)>,
     res_rx: Receiver<LoadedIconData>,
     fallback_app: Option<TextureHandle>,
-    fallback_shortcut: Option<TextureHandle>,
 }
 
 impl IconManager {
@@ -144,7 +142,6 @@ impl IconManager {
             queue,
             res_rx,
             fallback_app: None,
-            fallback_shortcut: None,
         }
     }
 
@@ -153,12 +150,7 @@ impl IconManager {
         if self.fallback_app.is_none() {
             self.fallback_app = Some(ctx.load_texture(
                 "fallback_app_icon",
-                build_fallback_icon(false),
-                TextureOptions::LINEAR,
-            ));
-            self.fallback_shortcut = Some(ctx.load_texture(
-                "fallback_shortcut_icon",
-                build_fallback_icon(true),
+                build_fallback_icon(),
                 TextureOptions::LINEAR,
             ));
         }
@@ -188,16 +180,13 @@ impl IconManager {
     }
 
     /// Retourne la texture de l'icône du fichier si prête, ou place le chemin en tête de la pile LIFO
-    /// des lignes visibles et retourne l'icône générique du type en attendant.
-    pub fn get_or_request(&mut self, path: &str, kind: ItemKind) -> Option<&TextureHandle> {
+    /// des lignes visibles et retourne l'icône générique en attendant.
+    pub fn get_or_request(&mut self, path: &str) -> Option<&TextureHandle> {
         if let Some(state) = self.cache.get(path) {
             if let CacheState::Loaded(tex) = state {
                 return Some(tex);
             }
-            return match kind {
-                ItemKind::Application => self.fallback_app.as_ref(),
-                ItemKind::Shortcut => self.fallback_shortcut.as_ref(),
-            };
+            return self.fallback_app.as_ref();
         }
 
         {
@@ -217,14 +206,11 @@ impl IconManager {
             }
         }
 
-        match kind {
-            ItemKind::Application => self.fallback_app.as_ref(),
-            ItemKind::Shortcut => self.fallback_shortcut.as_ref(),
-        }
+        self.fallback_app.as_ref()
     }
 }
 
-fn build_fallback_icon(is_shortcut: bool) -> ColorImage {
+fn build_fallback_icon() -> ColorImage {
     let w = 16usize;
     let h = 16usize;
     let mut rgba = vec![0u8; w * h * 4];
@@ -232,9 +218,9 @@ fn build_fallback_icon(is_shortcut: bool) -> ColorImage {
         for x in 2..14 {
             let idx = (y * w + x) * 4;
             if y <= 3 {
-                rgba[idx] = if is_shortcut { 70 } else { 215 };
-                rgba[idx + 1] = if is_shortcut { 140 } else { 75 };
-                rgba[idx + 2] = if is_shortcut { 230 } else { 75 };
+                rgba[idx] = 215;
+                rgba[idx + 1] = 75;
+                rgba[idx + 2] = 75;
                 rgba[idx + 3] = 255;
             } else if x == 2 || x == 13 || y == 14 {
                 rgba[idx] = 140;
@@ -692,17 +678,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_lnk_fallback_and_icons() {
-        unsafe {
-            CoInitializeEx(ptr::null(), COINIT_APARTMENTTHREADED as u32);
-        }
-        let broken_icon_lnk = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Miniconda3 (64-bit)\Anaconda Powershell Prompt (MiniConda3).lnk";
-        if Path::new(broken_icon_lnk).exists() {
-            let wide = to_wide_null(broken_icon_lnk);
-            let target = resolve_lnk_fallback_target(&wide);
-            println!("Resolved fallback target for Anaconda Powershell: {:?}", target);
-            assert!(target.is_some());
-            assert!(extract_shell_icon_rgba(broken_icon_lnk).is_some());
-        }
+    fn test_fallback_icon_builds() {
+        let img = build_fallback_icon();
+        assert_eq!(img.size, [16, 16]);
     }
 }

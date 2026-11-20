@@ -65,7 +65,6 @@ unsafe extern "C" {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ItemKind {
     Application,
-    Shortcut,
 }
 
 impl ItemKind {
@@ -73,7 +72,6 @@ impl ItemKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Application => "Application",
-            Self::Shortcut => "Raccourci d'application",
         }
     }
 
@@ -81,7 +79,6 @@ impl ItemKind {
     pub fn from_db_str(s: &str) -> Option<Self> {
         match s {
             "Application" => Some(Self::Application),
-            "Raccourci d'application" => Some(Self::Shortcut),
             _ => None,
         }
     }
@@ -164,7 +161,7 @@ impl LibraryDatabase {
              );\
              CREATE INDEX IF NOT EXISTS idx_items_category ON items(category);\
              CREATE INDEX IF NOT EXISTS idx_items_name_nocase ON items(name COLLATE NOCASE);\
-             DELETE FROM items WHERE kind NOT IN ('Application', 'Raccourci d''application');\0",
+             DELETE FROM items WHERE kind != 'Application';\0",
         )
     }
 
@@ -438,6 +435,48 @@ impl LibraryDatabase {
             unsafe {
                 Self::bind_str(stmt, 1, category);
                 Self::bind_str(stmt, 2, path);
+                let step_rc = sqlite3_step(stmt);
+                sqlite3_reset(stmt);
+                sqlite3_clear_bindings(stmt);
+                if step_rc != SQLITE_DONE {
+                    sqlite3_finalize(stmt);
+                    let _ = self.exec_batch("ROLLBACK;\0");
+                    return Err(self.last_error());
+                }
+            }
+        }
+
+        unsafe {
+            sqlite3_finalize(stmt);
+        }
+        self.exec_batch("COMMIT;\0")
+    }
+
+    /// Supprime un lot de chemins en une seule transaction atomique préparée.
+    pub fn delete_paths(&self, paths: &[String]) -> Result<(), String> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        self.exec_batch("BEGIN IMMEDIATE TRANSACTION;\0")?;
+        const SQL: &str = "DELETE FROM items WHERE path=?1;\0";
+        let mut stmt: *mut Sqlite3Stmt = ptr::null_mut();
+        let rc = unsafe {
+            sqlite3_prepare_v2(
+                self.db,
+                SQL.as_ptr(),
+                (SQL.len() - 1) as i32,
+                &mut stmt,
+                ptr::null_mut(),
+            )
+        };
+        if rc != SQLITE_OK || stmt.is_null() {
+            let _ = self.exec_batch("ROLLBACK;\0");
+            return Err(self.last_error());
+        }
+
+        for path in paths {
+            unsafe {
+                Self::bind_str(stmt, 1, path);
                 let step_rc = sqlite3_step(stmt);
                 sqlite3_reset(stmt);
                 sqlite3_clear_bindings(stmt);

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -12,7 +12,7 @@ use rustc_hash::FxHashSet;
 use crate::db::LibraryDatabase;
 use crate::icons::IconManager;
 use crate::index::InMemoryIndex;
-use crate::scanner::{ScanEvent, spawn_scan};
+use crate::scanner::{ScanEvent, is_valid_library_path, spawn_scan};
 use crate::updater::{
     CURRENT_VERSION, UpdateEvent, UpdateInfo, cleanup_old_executable, spawn_perform_update,
     spawn_update_check,
@@ -80,8 +80,8 @@ pub struct BibliothequeApp {
     selection_anchor: Option<usize>,
     context_menu_pos: Option<Pos2>,
 
-    // Largeurs interactives des colonnes (Nom, Type, Categorie)
-    col_widths: [f32; 3],
+    // Largeurs interactives des colonnes (Nom, Categorie)
+    col_widths: [f32; 2],
 
     // Analyse en arrière-plan
     scanning: bool,
@@ -111,8 +111,28 @@ impl BibliothequeApp {
         let db = LibraryDatabase::open().expect("Impossible d'initialiser library.db");
         let categories = db.categories();
         let mut index = InMemoryIndex::new();
+        let mut status_override = None;
         if let Ok(records) = db.load_all_items() {
-            index.replace_all(records, "", "");
+            let mut valid_records = Vec::with_capacity(records.len());
+            let mut invalid_paths = Vec::new();
+            for rec in records {
+                if is_valid_library_path(Path::new(&rec.path)) {
+                    valid_records.push(rec);
+                } else {
+                    invalid_paths.push(rec.path);
+                }
+            }
+            if !invalid_paths.is_empty() {
+                let removed = invalid_paths.len();
+                let _ = db.delete_paths(&invalid_paths);
+                status_override = Some((
+                    format!(
+                        "Nettoyage automatique : {removed} element(s) obsoletes ou indesirables retires."
+                    ),
+                    Some(Instant::now() + Duration::from_secs(8)),
+                ));
+            }
+            index.replace_all(valid_records, "", "");
         }
 
         let dark_mode = os_prefers_dark_mode();
@@ -135,11 +155,11 @@ impl BibliothequeApp {
             selected_rows: FxHashSet::default(),
             selection_anchor: None,
             context_menu_pos: None,
-            col_widths: [245.0, 155.0, 140.0],
+            col_widths: [280.0, 160.0],
             scanning: false,
             scan_tx,
             scan_rx,
-            status_override: None,
+            status_override,
             update_tx,
             update_rx,
             available_update: None,
@@ -302,7 +322,7 @@ impl BibliothequeApp {
                         .color(self.colors.text),
                 );
                 ui.label(
-                    RichText::new("Retrouvez rapidement vos applications et raccourcis Windows")
+                    RichText::new("Retrouvez rapidement vos applications Windows")
                         .font(FontId::proportional(13.0))
                         .color(self.colors.subtitle),
                 );
@@ -381,9 +401,7 @@ impl BibliothequeApp {
                         TextEdit::singleline(&mut self.search_query)
                             .id(search_id)
                             .frame(Frame::NONE)
-                            .hint_text(
-                                "Rechercher une application, un raccourci ou une categorie...",
-                            ),
+                            .hint_text("Rechercher une application ou une categorie..."),
                     );
                     if resp.changed() {
                         self.refilter();
@@ -538,12 +556,12 @@ impl BibliothequeApp {
                     Stroke::new(1.0, self.colors.border),
                 );
 
-                let headers = ["Nom", "Type", "Categorie", "Emplacement"];
+                let headers = ["Nom", "Categorie", "Emplacement"];
                 let mut x_offset = header_rect.left();
-                let mut col_rects = [Rect::NOTHING; 4];
+                let mut col_rects = [Rect::NOTHING; 3];
 
-                for i in 0..4 {
-                    let w = if i < 3 {
+                for i in 0..3 {
+                    let w = if i < 2 {
                         self.col_widths[i]
                     } else {
                         (header_rect.right() - x_offset).max(80.0)
@@ -562,7 +580,7 @@ impl BibliothequeApp {
                         self.colors.text,
                     );
 
-                    if i < 3 {
+                    if i < 2 {
                         let sep_x = rect.right();
                         let sep_rect = Rect::from_center_size(
                             Pos2::new(sep_x, header_rect.center().y),
@@ -635,8 +653,8 @@ impl BibliothequeApp {
                                 };
 
                                 let mut cx = row_rect.left();
-                                for col_i in 0..4 {
-                                    let cw = if col_i < 3 {
+                                for col_i in 0..3 {
+                                    let cw = if col_i < 2 {
                                         self.col_widths[col_i]
                                     } else {
                                         (row_rect.right() - cx).max(60.0)
@@ -651,7 +669,7 @@ impl BibliothequeApp {
                                         0 => {
                                             let mut text_x = cell_rect.left() + 8.0;
                                             if let Some(tex) =
-                                                self.icons.get_or_request(&item.path, item.kind)
+                                                self.icons.get_or_request(&item.path)
                                             {
                                                 let icon_rect = Rect::from_min_size(
                                                     Pos2::new(text_x, cell_rect.center().y - 8.0),
@@ -677,18 +695,6 @@ impl BibliothequeApp {
                                             );
                                         }
                                         1 => {
-                                            painter.text(
-                                                Pos2::new(
-                                                    cell_rect.left() + 8.0,
-                                                    cell_rect.center().y,
-                                                ),
-                                                egui::Align2::LEFT_CENTER,
-                                                item.kind.as_str(),
-                                                FontId::proportional(13.5),
-                                                text_col,
-                                            );
-                                        }
-                                        2 => {
                                             painter.text(
                                                 Pos2::new(
                                                     cell_rect.left() + 8.0,

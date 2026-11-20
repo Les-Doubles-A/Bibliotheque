@@ -1,12 +1,11 @@
 use memchr::memmem::Finder;
 use rustc_hash::FxHashSet;
 
-use crate::db::{DbRecord, ItemKind};
+use crate::db::DbRecord;
 
 #[derive(Debug, Clone)]
 pub struct IndexItem {
     pub name: String,
-    pub kind: ItemKind,
     pub category: String,
     pub path: String,
     /// Tampon contigu en minuscules `nom\0categorie\0chemin` pour recherche SIMD en une passe.
@@ -25,7 +24,6 @@ impl IndexItem {
 
         Self {
             name: rec.name,
-            kind: rec.kind,
             category: rec.category,
             path: rec.path,
             search_haystack,
@@ -170,7 +168,7 @@ impl InMemoryIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{LibraryDatabase, ScannedEntry};
+    use crate::db::{ItemKind, LibraryDatabase, ScannedEntry};
 
     #[test]
     fn test_sqlite_and_simd_index() {
@@ -188,9 +186,9 @@ mod tests {
                 kind: ItemKind::Application,
             },
             ScannedEntry {
-                path: r"C:\Users\Test\Desktop\Word.lnk".to_string(),
-                name: "Word".to_string(),
-                kind: ItemKind::Shortcut,
+                path: r"C:\Program Files\LibreOffice\program\soffice.exe".to_string(),
+                name: "soffice".to_string(),
+                kind: ItemKind::Application,
             },
         ];
         db.add_paths(&entries).expect("add paths");
