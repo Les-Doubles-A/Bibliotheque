@@ -2,6 +2,8 @@ use std::ffi::{CStr, CString, c_void};
 use std::path::Path;
 use std::ptr;
 
+use rustc_hash::FxHashSet;
+
 use crate::win_utils::{database_path, now_iso8601};
 
 #[repr(C)]
@@ -94,7 +96,6 @@ pub struct ScannedEntry {
 #[derive(Debug, Clone)]
 pub struct DbRecord {
     pub name: String,
-    pub kind: ItemKind,
     pub category: String,
     pub path: String,
 }
@@ -159,9 +160,13 @@ impl LibraryDatabase {
              CREATE TABLE IF NOT EXISTS categories (\
                  name TEXT PRIMARY KEY\
              );\
+             CREATE TABLE IF NOT EXISTS excluded_paths (\
+                 path TEXT PRIMARY KEY\
+             );\
              CREATE INDEX IF NOT EXISTS idx_items_category ON items(category);\
              CREATE INDEX IF NOT EXISTS idx_items_name_nocase ON items(name COLLATE NOCASE);\
-             DELETE FROM items WHERE kind != 'Application';\0",
+             DELETE FROM items WHERE kind != 'Application';\
+             DELETE FROM items WHERE path IN (SELECT path FROM excluded_paths);\0",
         )
     }
 
@@ -300,12 +305,11 @@ impl LibraryDatabase {
             while sqlite3_step(stmt) == SQLITE_ROW {
                 let name = Self::column_str(stmt, 0);
                 let kind_raw = Self::column_str(stmt, 1);
-                if let Some(kind) = ItemKind::from_db_str(&kind_raw) {
+                if ItemKind::from_db_str(&kind_raw).is_some() {
                     let category = Self::column_str(stmt, 2);
                     let path = Self::column_str(stmt, 3);
                     records.push(DbRecord {
                         name,
-                        kind,
                         category,
                         path,
                     });
@@ -492,6 +496,80 @@ impl LibraryDatabase {
             sqlite3_finalize(stmt);
         }
         self.exec_batch("COMMIT;\0")
+    }
+
+    /// Ajoute un lot de chemins à la liste noire et les retire de la bibliothèque.
+    pub fn exclude_paths(&self, paths: &[String]) -> Result<(), String> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        self.exec_batch("BEGIN IMMEDIATE TRANSACTION;\0")?;
+        const INS_SQL: &str = "INSERT OR IGNORE INTO excluded_paths(path) VALUES(?1);\0";
+        const DEL_SQL: &str = "DELETE FROM items WHERE path=?1;\0";
+
+        for sql in [INS_SQL, DEL_SQL] {
+            let mut stmt: *mut Sqlite3Stmt = ptr::null_mut();
+            let rc = unsafe {
+                sqlite3_prepare_v2(
+                    self.db,
+                    sql.as_ptr(),
+                    (sql.len() - 1) as i32,
+                    &mut stmt,
+                    ptr::null_mut(),
+                )
+            };
+            if rc != SQLITE_OK || stmt.is_null() {
+                let _ = self.exec_batch("ROLLBACK;\0");
+                return Err(self.last_error());
+            }
+            for path in paths {
+                unsafe {
+                    Self::bind_str(stmt, 1, path);
+                    let step_rc = sqlite3_step(stmt);
+                    sqlite3_reset(stmt);
+                    sqlite3_clear_bindings(stmt);
+                    if step_rc != SQLITE_DONE {
+                        sqlite3_finalize(stmt);
+                        let _ = self.exec_batch("ROLLBACK;\0");
+                        return Err(self.last_error());
+                    }
+                }
+            }
+            unsafe {
+                sqlite3_finalize(stmt);
+            }
+        }
+
+        self.exec_batch("COMMIT;\0")
+    }
+
+    /// Retourne l'ensemble des chemins exclus manuellement par l'utilisateur.
+    pub fn excluded_paths(&self) -> FxHashSet<String> {
+        const SQL: &str = "SELECT path FROM excluded_paths;\0";
+        let mut stmt: *mut Sqlite3Stmt = ptr::null_mut();
+        let rc = unsafe {
+            sqlite3_prepare_v2(
+                self.db,
+                SQL.as_ptr(),
+                (SQL.len() - 1) as i32,
+                &mut stmt,
+                ptr::null_mut(),
+            )
+        };
+        let mut set = FxHashSet::default();
+        if rc != SQLITE_OK || stmt.is_null() {
+            return set;
+        }
+        unsafe {
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let path = Self::column_str(stmt, 0);
+                if !path.is_empty() {
+                    set.insert(path);
+                }
+            }
+            sqlite3_finalize(stmt);
+        }
+        set
     }
 }
 

@@ -148,6 +148,19 @@ impl InMemoryIndex {
         self.filter(query, selected_category);
     }
 
+    /// Retire des éléments exclus en mémoire sans recharger toute la base SQLite.
+    pub fn remove_paths_in_memory(
+        &mut self,
+        paths: &[String],
+        query: &str,
+        selected_category: &str,
+    ) {
+        let path_set: FxHashSet<&str> = paths.iter().map(String::as_str).collect();
+        self.items
+            .retain(|item| !path_set.contains(item.path.as_str()));
+        self.filter(query, selected_category);
+    }
+
     #[inline]
     pub fn total_count(&self) -> usize {
         self.items.len()
@@ -213,6 +226,12 @@ mod tests {
         db.delete_category("Jeux").expect("delete category");
         index.clear_category_in_memory("Jeux", "", "Jeux");
         assert_eq!(index.filtered_count(), 0);
+
+        let excluded_path = vec![r"C:\Games\HollowKnight.exe".to_string()];
+        db.exclude_paths(&excluded_path).expect("exclude path");
+        assert!(db.excluded_paths().contains(r"C:\Games\HollowKnight.exe"));
+        index.remove_paths_in_memory(&excluded_path, "", "");
+        assert_eq!(index.total_count(), 1);
 
         drop(db);
         let _ = std::fs::remove_file(&temp_db);

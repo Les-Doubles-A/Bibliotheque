@@ -3,14 +3,18 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
+use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 use crossbeam_channel::{Sender, unbounded};
 use crossbeam_deque::{Injector, Steal, Worker};
+use rustc_hash::FxHashSet;
+use windows_sys::Win32::UI::Shell::ExtractIconExW;
 
 use crate::db::{ItemKind, LibraryDatabase, ScannedEntry};
+use crate::win_utils::to_wide_null;
 
 const FILE_ATTRIBUTE_HIDDEN: u32 = 0x0000_0002;
 const FILE_ATTRIBUTE_SYSTEM: u32 = 0x0000_0004;
@@ -150,7 +154,12 @@ pub fn should_skip_exe_stem(stem: &str) -> bool {
         return true;
     }
 
-    // Sous-chaînes exclues (désinstalleurs, updaters, crash/télémétrie, helpers/services)
+    // Composants matériels ASUS Aura / HAL
+    if lower.starts_with("aac") && lower.contains("hal") {
+        return true;
+    }
+
+    // Sous-chaînes exclues (désinstalleurs, updaters, crash/télémétrie, helpers/services, HAL)
     const SKIP_CONTAINS: &[&str] = &[
         "uninstall",
         "installer",
@@ -173,6 +182,9 @@ pub fn should_skip_exe_stem(stem: &str) -> bool {
         "stub",
         "bootstrap",
         "shim",
+        "hal_x64",
+        "hal_x86",
+        "aacambient",
         "qtwebengineprocess",
         "cefsubproc",
         "chrome_pwa_launcher",
@@ -187,6 +199,25 @@ pub fn should_skip_exe_stem(stem: &str) -> bool {
         "sihost",
     ];
     SKIP_CONTAINS.iter().any(|s| lower.contains(s))
+}
+
+/// Vérifie que l'exécutable embarque au moins une icône native (`RT_GROUP_ICON`).
+/// Élimine automatiquement les processus invisibles, serveurs COM et HAL matériels sans icône.
+pub fn has_embedded_icon(path: &Path) -> bool {
+    let Some(path_str) = path.to_str() else {
+        return false;
+    };
+    let wide = to_wide_null(path_str);
+    let count = unsafe {
+        ExtractIconExW(
+            wide.as_ptr(),
+            -1,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            0,
+        )
+    };
+    count > 0 && count != u32::MAX
 }
 
 /// Vérifie via l'en-tête PE Windows que le fichier est bien une application graphique (`GUI`)
@@ -276,7 +307,7 @@ pub fn is_valid_library_path(path: &Path) -> bool {
         }
     }
 
-    is_windows_gui_exe(path)
+    is_windows_gui_exe(path) && has_embedded_icon(path)
 }
 
 pub fn spawn_scan(folders: Vec<PathBuf>, event_tx: Sender<ScanEvent>, ctx: egui::Context) {
@@ -297,6 +328,7 @@ fn run_parallel_scan(
     ctx: &egui::Context,
 ) -> Result<(), String> {
     let db = LibraryDatabase::open()?;
+    let excluded: Arc<FxHashSet<String>> = Arc::new(db.excluded_paths());
     let mut total_indexed: usize = 0;
 
     let num_threads = thread::available_parallelism()
@@ -330,6 +362,7 @@ fn run_parallel_scan(
                 let injector = Arc::clone(&injector);
                 let stealers = Arc::clone(&stealers);
                 let active_tasks = Arc::clone(&active_tasks);
+                let excluded = Arc::clone(&excluded);
                 let batch_tx = batch_tx.clone();
 
                 s.spawn(move || {
@@ -380,12 +413,18 @@ fn run_parallel_scan(
                                         }
 
                                         let full_path = entry.path();
-                                        if !is_windows_gui_exe(&full_path) {
+                                        let path_str = full_path.to_string_lossy().into_owned();
+                                        if excluded.contains(&path_str) {
+                                            continue;
+                                        }
+                                        if !is_windows_gui_exe(&full_path)
+                                            || !has_embedded_icon(&full_path)
+                                        {
                                             continue;
                                         }
 
                                         local_batch.push(ScannedEntry {
-                                            path: full_path.to_string_lossy().into_owned(),
+                                            path: path_str,
                                             name: stem.to_string(),
                                             kind: ItemKind::Application,
                                         });
@@ -463,6 +502,8 @@ mod tests {
         assert!(should_skip_exe_stem("QtWebEngineProcess"));
         assert!(should_skip_exe_stem("Bibliotheque.old"));
         assert!(should_skip_exe_stem("Squirrel"));
+        assert!(should_skip_exe_stem("Aac3572DramHal_x64"));
+        assert!(should_skip_exe_stem("AacAmbientLighting"));
 
         assert!(!should_skip_exe_stem("Bibliotheque"));
         assert!(!should_skip_exe_stem("Discord"));
@@ -501,6 +542,7 @@ mod tests {
         write_fake_pe(&dll64, 0x020B, IMAGE_SUBSYSTEM_WINDOWS_GUI, true);
 
         assert!(is_windows_gui_exe(&gui64));
+        assert!(!has_embedded_icon(&gui64));
         assert!(!is_windows_gui_exe(&cui64));
         assert!(!is_windows_gui_exe(&dll64));
 

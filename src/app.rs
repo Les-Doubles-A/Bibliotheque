@@ -311,6 +311,32 @@ impl BibliothequeApp {
         );
     }
 
+    fn exclude_selected(&mut self) {
+        let paths = self.selected_paths();
+        if paths.is_empty() {
+            return;
+        }
+        if let Err(err) = self.db.exclude_paths(&paths) {
+            self.modal = ModalDialog::ErrorMessage {
+                title: "Erreur SQLite".to_string(),
+                message: err,
+            };
+            return;
+        }
+        let count = paths.len();
+        self.index.remove_paths_in_memory(
+            &paths,
+            &self.search_query,
+            &self.selected_category,
+        );
+        self.selected_rows.clear();
+        self.selection_anchor = None;
+        self.status_override = Some((
+            format!("{count} element(s) exclus de la bibliotheque."),
+            Some(Instant::now() + Duration::from_secs(6)),
+        ));
+    }
+
     fn render_header(&mut self, ui: &mut Ui, ctx: &Context) {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
@@ -868,6 +894,22 @@ impl BibliothequeApp {
                                 self.assign_category(&paths, &cat);
                                 close_menu = true;
                             }
+                        }
+
+                        ui.separator();
+                        if ui
+                            .add_sized(
+                                [ui.available_width(), 26.0],
+                                egui::Button::new(
+                                    RichText::new("Exclure de la bibliotheque")
+                                        .color(self.colors.accent),
+                                )
+                                .frame(false),
+                            )
+                            .clicked()
+                        {
+                            self.exclude_selected();
+                            close_menu = true;
                         }
                     });
             });
